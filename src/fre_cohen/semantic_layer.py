@@ -3,7 +3,7 @@
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Sequence
+from typing import Dict, Sequence
 
 from langchain.chains import LLMChain
 from langchain.prompts.chat import (
@@ -16,6 +16,7 @@ from fre_cohen import configuration
 from fre_cohen.data_structure import (
     CompositeEnum,
     CompositeField,
+    Edge,
     Field,
     FieldsGraph,
     IntentType,
@@ -38,11 +39,15 @@ class SemanticInterpretation(ABC):
         """Returns the data structure"""
 
 
-class SemanticInfo(BaseModel):
+class AllSemanticInfo(BaseModel):
     """Semantic information"""
 
-    unit: str = PyField(description="The unit of the field")
-    description: str = PyField(description="The description of the field")
+    descriptions: Dict[str, str] = PyField(
+        {}, description="Dictionnary of descriptions, indexed by field name"
+    )
+    units: Dict[str, str] = PyField(
+        {}, description="Dictionnary of units, indexed by field name"
+    )
 
 
 class AggregationInfo(BaseModel):
@@ -86,6 +91,8 @@ class IntentInfo(BaseModel):
         [], description="The intent of the visualization"
     )
 
+    description: str = PyField("", description="The description of the data structure")
+
 
 class OpenAISemanticInterpretation(SemanticInterpretation):
     """Semantic interpretation using OpenAI API"""
@@ -93,50 +100,49 @@ class OpenAISemanticInterpretation(SemanticInterpretation):
     def __init__(self, config: configuration.Config, fields: list[Field]):
         super().__init__(fields)
 
-        self._config = config
-
-        self._llm_enrich_field = self._build_llm_chain_for_rich_field(config)
         self._llm_grouping = self._build_llm_chain_for_grouping(config)
         self._llm_links = self._build_llm_chain_for_links(config)
         self._llm_intent = self._build_llm_chain_for_intent(config)
+        self._llm_enrich_all_fields = self._build_llm_chain_for_all_rich_field(config)
 
     def get_data_structure(self) -> FieldsGraph:
         """Returns the data structure"""
 
         # Enrich the field data
-        rich_fields = [self._enrich_field(field) for field in self._fields]
+        rich_fields = self._enrich_all_fields(self._fields)
 
         # Group related fields
         grouped_structure = self._group_fields(rich_fields)
 
-        def _find_composite_field(name: str) -> CompositeField:
-            return next(cf for cf in grouped_structure if cf.name == name)
+        def find_composite_field_index(name: str) -> int:
+            return next(i for i, cf in enumerate(grouped_structure) if cf.name == name)
 
         # Determine links between fields
         links = self._find_links(grouped_structure)
         edges = [
-            (
-                _find_composite_field(l.from_field),
-                _find_composite_field(l.to_field),
-                l.link,
+            Edge(
+                source=find_composite_field_index(l.from_field),
+                target=find_composite_field_index(l.to_field),
+                link=l.link,
             )
             for l in links
             if l.link != LinkEnum.NONE
         ]
 
         # Determine the intent
-        intents = self._determine_intents(grouped_structure)
+        intent_info = self._determine_intents(grouped_structure)
 
         # Build the graph
         return FieldsGraph(
             nodes=grouped_structure,
             edges=edges,
-            intents=intents,
+            intents=intent_info.intents,
+            description=intent_info.description,
         )
 
     def _determine_intents(
         self, composite_fields: Sequence[CompositeField]
-    ) -> Sequence[IntentType]:
+    ) -> IntentInfo:
         """Determines the intent of the visualization"""
         input_data = {
             "all_composite_field_names": [
@@ -150,18 +156,21 @@ class OpenAISemanticInterpretation(SemanticInterpretation):
             logger.debug("Intent LLM output: %s", intent_info)
         except Exception as ex:
             logger.error("Failed to run intent LLM: %s", ex)
-            intent_info = IntentInfo(intents=[])
+            intent_info = IntentInfo(intents=[], description="")
 
-        return intent_info.intents
+        return intent_info
 
     def _find_links(
         self, composite_fields: Sequence[CompositeField]
     ) -> Sequence[LinkCompositeFields]:
         """Finds the links between the data structures"""
         input_data = {
-            "all_composite_field_names": [
-                composite_field.name for composite_field in composite_fields
-            ],
+            "all_composite_field_details": "\n".join(
+                [
+                    f"{composite_field.name}: {composite_field.description}"
+                    for composite_field in composite_fields
+                ]
+            ),
         }
 
         logger.debug("Links LLM input: %s", input_data)
@@ -217,52 +226,44 @@ class OpenAISemanticInterpretation(SemanticInterpretation):
             for field_name in fields_to_lookup
         ]
 
-    def _enrich_field(self, field: Field) -> RichField:
-        """Enriches the field with semantic information"""
+    def _enrich_all_fields(self, fields: Sequence[Field]) -> list[RichField]:
+        """Enriches all the fields with semantic information"""
+        fields_summary = "\n".join(
+            [f'{field.name}: "{field.summary}"' for field in fields]
+        )
         input_data = {
-            "field_name": field.name,
-            "field_type": field.type,
-            "field_summary": field.summary,
-            "field_samples": field.samples,
+            "all_fields_details": fields_summary,
         }
         logger.debug("Enrich LLM input: %s", input_data)
-        output: SemanticInfo = self._llm_enrich_field.run(input_data)
+        output: AllSemanticInfo = self._llm_enrich_all_fields.run(input_data)
         logger.debug("Enrich LLM output: %s", output)
 
-        return RichField(
-            field=field,
-            unit=output.unit,
-            description=output.description,
-        )
+        # Iterate over existing fields
+        return [
+            RichField(
+                field=field,
+                unit=output.units.get(field.name, ""),
+                description=output.descriptions.get(field.name, ""),
+            )
+            for field in fields
+        ]
 
-    def _build_llm_chain_for_rich_field(self, config: configuration.Config) -> LLMChain:
+    def _build_llm_chain_for_all_rich_field(
+        self, config: configuration.Config
+    ) -> LLMChain:
         """Builds a LLMChain to enrich a field"""
         return build_llm_chain(
             config,
-            SemanticInfo,
+            AllSemanticInfo,
             [
+                HumanMessagePromptTemplate.from_template(
+                    "Here are the fields composing our data set: {all_fields_details}"
+                ),
                 SystemMessagePromptTemplate.from_template(
                     "Units are important to understand the data. Please write them as symbols."
                 ),
                 HumanMessagePromptTemplate.from_template(
-                    'Given a data set named "{field_name}", with some samples like this: "{field_samples}", what do you think is the unit of the data? How would you describe the data?'
-                ),
-            ],
-        )
-
-    def _build_llm_chain_for_aggregation(
-        self, config: configuration.Config
-    ) -> LLMChain:
-        """Builds a LLMChain to aggregate fields"""
-        return build_llm_chain(
-            config,
-            AggregationInfo,
-            [
-                HumanMessagePromptTemplate.from_template(
-                    'There is a group of fields named "{other_field_names}" with units "{other_field_units}" and described as "{other_field_descriptions}". They all relate together as they form a multi-dimensional field.'
-                ),
-                HumanMessagePromptTemplate.from_template(
-                    'Given a field named "{field_name}", with unit "{field_unit}" and described as "{field_description}", do you think it is another dimension to the same group of fields? What is the logical relationship between the fields?'
+                    "Can you provide a brief description and the units of measurement for each of the fields in the structure?"
                 ),
             ],
         )
@@ -273,6 +274,9 @@ class OpenAISemanticInterpretation(SemanticInterpretation):
             config,
             GroupingInfo,
             [
+                SystemMessagePromptTemplate.from_template(
+                    "The order of the fields is important, consecutive fields are more closely related."
+                ),
                 HumanMessagePromptTemplate.from_template(
                     "Considering the fields: {all_field_names} - which fields would you group together to form meaningful composite fields? Please give a name to each group of fields with a composition reason."
                 ),
@@ -286,7 +290,7 @@ class OpenAISemanticInterpretation(SemanticInterpretation):
             CausalInfo,
             [
                 HumanMessagePromptTemplate.from_template(
-                    "Considering the fields: {all_composite_field_names} - what do you think the causality link are between those fields?"
+                    "Considering the fields: {all_composite_field_details} - what do you think the causality link are between those fields?"
                 ),
             ],
         )
@@ -298,7 +302,7 @@ class OpenAISemanticInterpretation(SemanticInterpretation):
             IntentInfo,
             [
                 HumanMessagePromptTemplate.from_template(
-                    "Considering the fields: {all_composite_field_names} - What is the main purpose of the visualization? What insights do you hope to gain from it?"
+                    "Considering the fields: {all_composite_field_names} - What is the main purpose of the visualization? What insights do you hope to gain from it? How would you describe the data structure?"
                 ),
             ],
         )

@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Sequence
+from typing import Any, Optional, Sequence, Union
 
 from pydantic import BaseModel
 
@@ -14,20 +14,65 @@ from pydantic import BaseModel
 class LinkEnum(str, Enum):
     """Link between columns, capturing causality, correlation or none."""
 
-    CAUSALITY = "causality"
+    DEPENDENCY = "dependency"
     CORRELATION = "correlation"
+    CONSTRAINT = "constraint"
     NONE = "none"
+
+
+class Location(BaseModel):
+    """Location data type, capturing the latitude and longitude."""
+
+    latitude: float
+    longitude: float
+    altitude: Optional[float]
+
+
+class Vector(BaseModel):
+    """Vector data type, capturing the x, y and z coordinates."""
+
+    x: float
+    y: float
+    z: float
+
+
+class DateTime(BaseModel):
+    """Date time data type, capturing the date and time."""
+
+    date: str
+    time: str
+
+
+class Matrix(BaseModel):
+    """Matrix data type, capturing the matrix."""
+
+    matrix: Sequence[Sequence[float]]
+
+
+class Quaternion(BaseModel):
+    """Quaternion data type, capturing the quaternion."""
+
+    w: float
+    x: float
+    y: float
+    z: float
+
+
+class CompositeUnion(BaseModel):
+    """Composite data type, capturing the union of all composite types."""
+
+    composite: Union[Location, Vector, DateTime, Matrix, Quaternion]
 
 
 class CompositeEnum(str, Enum):
     """Composite data types, capturing coordinates, date time, etc."""
 
-    LOCATION = "location"
-    VECTOR = "vector"
-    DATETIME = "datetime"
-    MATRIX = "matrix"
-    QUATERNION = "quaternion"
-    NONE = "none"
+    LOCATION = "location (latitude, longitude, altitude)"
+    VECTOR = "vector (x, y, z)"
+    DATETIME = "datetime (date, time)"
+    QUATERNION = "quaternion (w, x, y, z)"
+    MATRIX = "matrix (list of float)"
+    NONE = "none (basic data type)"
 
 
 class TypeEnum(str, Enum):
@@ -86,10 +131,33 @@ class IntentType(str, Enum):
     NONE = "none"
 
 
+class Edge(BaseModel):
+    """Edge, capturing the source and target nodes and the link."""
+
+    source: int
+    target: int
+    link: LinkEnum
+
+
 class FieldsGraph(BaseModel):
     """Graph of fields, capturing the links between columns."""
 
     nodes: Sequence[CompositeField]
-    edges: Sequence[tuple[CompositeField, CompositeField, LinkEnum]]
+    edges: Sequence[Edge]
 
     intents: Sequence[IntentType]
+
+    description: str
+
+
+class IndividualGraph(BaseModel):
+    """Individual graph, capturing the links between columns."""
+
+    title: str
+    fields: Sequence[CompositeField]
+
+
+class GraphsLayout(BaseModel):
+    """Layout of the subgraphs composing the visualization."""
+
+    graphs: Sequence[IndividualGraph]
