@@ -154,10 +154,28 @@ class IndividualGraph(BaseModel):
     """Individual graph, capturing the links between columns."""
 
     title: str
-    fields: Sequence[CompositeField]
+    chart_description: str
+    independent_variables: Sequence[int]
+    dependent_variables: Sequence[int]
 
 
 class GraphsLayout(BaseModel):
     """Layout of the subgraphs composing the visualization."""
 
+    fields_graph: FieldsGraph
     graphs: Sequence[IndividualGraph]
+
+
+class GraphSpecifications(BaseModel):
+    """Specifications of the graph."""
+
+    format_type: str
+    specifications: Any
+    graph: IndividualGraph
+
+
+class LayoutSpecifications(BaseModel):
+    """Specifications of the layout."""
+
+    fields_graph: FieldsGraph
+    specifications: Sequence[GraphSpecifications]

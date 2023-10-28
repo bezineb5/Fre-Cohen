@@ -15,7 +15,7 @@ from fre_cohen.data_structure import (
     GraphsLayout,
     IndividualGraph,
 )
-from fre_cohen.llms import build_llm_chain
+from fre_cohen.llms import LLMQualityEnum, build_llm_chain
 
 
 logger = logging.getLogger(__name__)
@@ -43,8 +43,17 @@ class LayoutInfo(BaseModel):
     """Layout information"""
 
     titles: list[str] = PyField([], description="List of titles for the layouts")
-    fields: list[list[str]] = PyField(
-        [], description="List of the lists of fields for the layouts"
+    chart_descriptions: list[str] = PyField(
+        [],
+        description="List of chart descriptions, i.e. what kind of representation to use?",
+    )
+    independent_fields: list[list[str]] = PyField(
+        [],
+        description="List of the lists of independent variable fields for the layouts",
+    )
+    dependent_fields: list[list[str]] = PyField(
+        [],
+        description="List of the lists of dependent variable fields for the layouts",
     )
 
 
@@ -60,18 +69,39 @@ class LLMMultipleVisualizationLayer(MultipleVisualizationLayer):
         """Computes a layout for the graph"""
         layout_info = self._generate_layout()
 
-        pairs = zip(layout_info.titles, layout_info.fields)
+        tuples = zip(
+            layout_info.titles,
+            layout_info.chart_descriptions,
+            layout_info.independent_fields,
+            layout_info.dependent_fields,
+            strict=True,
+        )
+
         return GraphsLayout(
+            fields_graph=self._fields_graph,
             graphs=[
                 IndividualGraph(
                     title=title,
-                    fields=[
-                        self._get_node_by_name(field_name) for field_name in fields
+                    chart_description=chart_description,
+                    independent_variables=[
+                        self._get_node_index_by_name(field_index)
+                        for field_index in independent_fields
+                    ],
+                    dependent_variables=[
+                        self._get_node_index_by_name(field_index)
+                        for field_index in dependent_fields
                     ],
                 )
-                for title, fields in pairs
-            ]
+                for title, chart_description, independent_fields, dependent_fields in tuples
+            ],
         )
+
+    def _get_node_index_by_name(self, name: str) -> int:
+        """Returns the index of the node by name"""
+        for index, node in enumerate(self._fields_graph.nodes):
+            if node.name == name:
+                return index
+        raise ValueError(f"Node with name {name} not found")
 
     def _get_node_by_name(self, name: str) -> CompositeField:
         """Returns the node by name"""
@@ -91,14 +121,9 @@ class LLMMultipleVisualizationLayer(MultipleVisualizationLayer):
         input_data = {
             "all_fields_details": fields_summary,
         }
-        logger.debug("Enrich LLM input: %s", input_data)
+        logger.debug("Layout LLM input: %s", input_data)
         output: LayoutInfo = self._llm_layout.run(input_data)
-        logger.debug("Enrich LLM output: %s", output)
-        if len(output.fields) != len(output.titles):
-            raise ValueError(
-                f"Number of titles ({len(output.titles)}) and number of fields ({len(output.fields)}) do not match"
-            )
-
+        logger.debug("Layout LLM output: %s", output)
         return output
 
     def _build_llm_chain_for_layout(self, config: configuration.Config) -> LLMChain:
@@ -107,11 +132,15 @@ class LLMMultipleVisualizationLayer(MultipleVisualizationLayer):
             config,
             LayoutInfo,
             [
-                HumanMessagePromptTemplate.from_template(
+                SystemMessagePromptTemplate.from_template(
                     "Here are the fields composing our data set: {all_fields_details}"
                 ),
-                HumanMessagePromptTemplate.from_template(
-                    "Can you group the fields into smaller subsets based on their relationships or similarities, and suggest a way to visualize each subset as a separate graph?"
+                SystemMessagePromptTemplate.from_template(
+                    "Given a large number of fields, I want to split them into smaller graphs. Can you suggest a way to group the fields based on their relationships or similarities, and then identify the independent and dependent variables for each graph? What would be meaningful titles for each graph, describing what is the purpose of the graph? How would you describe their representation (what type of visualization)?"
+                ),
+                SystemMessagePromptTemplate.from_template(
+                    "You can reuse the same independent variable fields for multiple graphs."
                 ),
             ],
+            quality=LLMQualityEnum.ACCURACY,
         )

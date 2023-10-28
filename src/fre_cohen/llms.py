@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Type
 
 from langchain.chains import LLMChain
@@ -15,30 +16,48 @@ from langchain.schema import BaseOutputParser
 from fre_cohen.configuration import Config
 
 
-def get_openai_llm(config: Config) -> ChatOpenAI:
+# Enumeration to choose speed or accuracy
+class LLMQualityEnum(str, Enum):
+    """Enumeration of the LLM quality"""
+
+    SPEED = "speed"
+    ACCURACY = "accuracy"
+
+
+def get_openai_llm(config: Config, quality: LLMQualityEnum) -> ChatOpenAI:
     """Returns the OpenAI LLM"""
+
+    # Choose the model
+    if quality == LLMQualityEnum.SPEED:
+        model = "gpt-3.5-turbo"
+    elif quality == LLMQualityEnum.ACCURACY:
+        model = "gpt-4"
+    else:
+        raise ValueError(f"Unknown quality: {quality}")
+
     # Timeout is in seconds
     return ChatOpenAI(
         openai_api_key=config.openai_api_key,
-        model="gpt-3.5-turbo",
+        model=model,
         request_timeout=config.request_timeout_seconds,
     )
 
 
-def get_llm(config: Config) -> BaseChatModel:
+def get_llm(config: Config, quality: LLMQualityEnum) -> BaseChatModel:
     """Returns the LLM"""
-    return get_openai_llm(config)
+    return get_openai_llm(config, quality=quality)
 
 
 def build_llm_chain(
     config: Config,
     pydantic_message: Type[BaseModel],
     prompts: list[BaseMessagePromptTemplate],
+    quality: LLMQualityEnum = LLMQualityEnum.SPEED,
 ) -> LLMChain:
     """Builds the LLM chain"""
     return _JsonLLMChain(
         config=config, pydantic_message=pydantic_message, prompts=prompts
-    ).llm_chain()
+    ).llm_chain(quality=quality)
 
 
 class _JsonLLMChain:
@@ -73,11 +92,11 @@ class _JsonLLMChain:
             pydantic_object=self._pydantic_message,
         )
 
-    def llm_chain(self) -> LLMChain:
+    def llm_chain(self, quality: LLMQualityEnum) -> LLMChain:
         """Returns the LLM chain"""
         parser = self._output_parser()
         return LLMChain(
-            llm=get_llm(self._config),
+            llm=get_llm(self._config, quality=quality),
             prompt=self._prompt_template(parser, self._prompts),
             output_parser=parser,
         )
