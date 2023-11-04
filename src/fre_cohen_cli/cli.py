@@ -1,9 +1,13 @@
 """Minimal CLI for fre_cohen package."""
 
 import argparse
+import http.server
 import json
 import logging
+import pathlib
+import multiprocessing
 from enum import Enum
+import socket
 from typing import Optional
 
 import altair as alt
@@ -119,7 +123,7 @@ def _list_layers_to_apply(args: argparse.Namespace) -> list[str]:
 
 
 def _apply_semantic_layer(
-    config: configuration.Config, metadata: list[Field], output_base: str, **kwargs
+    *, config: configuration.Config, metadata: list[Field], output_base: str, **kwargs
 ) -> str:
     """Applies the semantic layer"""
 
@@ -147,7 +151,7 @@ def _apply_semantic_layer(
 
 
 def _apply_multi_visualization_layer(
-    config: configuration.Config, input_json: str, **kwargs
+    *, config: configuration.Config, input_json: str, **kwargs
 ) -> str:
     """Applies the multi visualization layer"""
 
@@ -169,6 +173,7 @@ def _apply_multi_visualization_layer(
 
 
 def _apply_visualization_layer(
+    *,
     config: configuration.Config,
     input_json: str,
     data_source: str,
@@ -198,11 +203,75 @@ def _apply_visualization_layer(
     )
 
 
+class FileServer:
+    """Simple HTTP server for serving a file"""
+
+    def __init__(self, port: Optional[int], file_to_serve: pathlib.Path) -> None:
+        self.process: Optional[multiprocessing.Process] = None
+        self.file_to_serve = file_to_serve.absolute()
+        self.port = port if port else self._find_available_port()
+
+    def _find_available_port(self) -> int:
+        """Finds an available port"""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            return s.getsockname()[1]
+
+    def get_file_url(self) -> str:
+        """Returns the URL of the file which is served"""
+        return f"http://localhost:{self.port}/{self.file_to_serve.name}"
+
+    def _start(self) -> None:
+        server = self._init_server()
+        server.serve_forever()
+
+    def start_in_new_process(self) -> None:
+        """Starts the server in a new process"""
+        self.process = multiprocessing.Process(target=self._start)
+        self.process.start()
+
+    def _init_server(self) -> http.server.HTTPServer:
+        file_to_serve = self.file_to_serve.name
+
+        class Handler(http.server.SimpleHTTPRequestHandler):
+            """Handler for serving the file"""
+
+            def __init__(self, *args, **kwargs):
+                self.file_to_serve = file_to_serve
+                super().__init__(*args, **kwargs)
+
+            def do_GET(self):
+                self.path = self.file_to_serve
+                return super().do_GET()
+
+            def end_headers(self):
+                self.send_header("Access-Control-Allow-Origin", "*")
+                super().end_headers()
+
+        # Create the server
+        logger.info("Serving file %s on port %d", self.file_to_serve, self.port)
+        return http.server.ThreadingHTTPServer(("127.0.0.1", self.port), Handler)
+
+    def stop(self) -> None:
+        """Stops the server"""
+        if self.process:
+            # Wait for the server process to finish
+            self.process.kill()
+            self.process.join()
+            self.process = None
+
+
+def _render(vl_spec: str, output_file: str) -> None:
+    """Renders the content, made in a separate process to avoid a bug in vl-convert"""
+    chart = alt.Chart.from_json(vl_spec)
+    chart.save(output_file)
+
+
 def _apply_render_visualization(
-    config: configuration.Config,
+    *,
     input_json: str,
-    data_source: str,
     output_base: str,
+    data_source: str,
     **kwargs,
 ):
     """Renders the visualization"""
@@ -212,11 +281,41 @@ def _apply_render_visualization(
     # Deserialize layout specifications from JSON
     layout_specs = LayoutSpecifications(**json.loads(input_json))
 
+    # Bug in vl-convert: it cannot fetch data from a file:// URL
+    # So we need to start a webserver to serve the data
+    server = FileServer(port=53789, file_to_serve=pathlib.Path(data_source))
+    server.start_in_new_process()
+    logger.info("Server started")
+
+    # Render each visualization
     for i, layout_spec in enumerate(layout_specs.specifications):
-        output_file = f"{output_base}_visualization_{i}.svg"
-        chart = alt.Chart.from_json(json.dumps(layout_spec.specifications))
-        chart.save(output_file)
-        logger.info("Visualization %d saved to: %s", i, output_file)
+        try:
+            output_file = f"{output_base}_visualization_{i}.svg"
+            logger.info("Rendering visualization %d to: %s", i, output_file)
+
+            # Hack to fix the bug in vl-convert:
+            # update the data source path to the locally served file
+            layout_spec.specifications.setdefault("data", {})[
+                "url"
+            ] = server.get_file_url()
+            logger.info(
+                "Updated data source: %s", layout_spec.specifications["data"]["url"]
+            )
+
+            # Render the visualization directly using vl_convert
+            vl_spec = json.dumps(layout_spec.specifications)
+            # For no known reason, it must be done in a separate process
+            process = multiprocessing.Process(
+                target=_render, args=(vl_spec, output_file)
+            )
+            process.start()
+            process.join()
+            logger.info("Visualization %s saved to: %s", vl_spec, output_file)
+        except Exception as e:
+            logger.error("Error while rendering visualization %d", i, exc_info=e)
+
+    server.stop()
+    return None
 
 
 LAYER_METHODS = {
@@ -240,7 +339,7 @@ def main():
     # Ingest data from the CSV
     csv_path = args.input
     ingestion = CSVIngestion(path=csv_path)
-    # data = ingestion.get_data()
+    data = ingestion.get_data()
     metadata = ingestion.get_metadata()
 
     # Apply relevant layers
@@ -263,6 +362,7 @@ def main():
             input_json=current_json,
             output_base=args.output,
             data_source=csv_path,
+            data=data,
         )
 
         if current_json is None:

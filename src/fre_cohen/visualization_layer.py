@@ -49,6 +49,10 @@ class VegaSpecification(BaseModel):
         None,
         description="Specifications of the graph, e.g. the vega-lite specification.",
     )
+    best_visualization_type: str = PyField(
+        None,
+        description="Best visualization type for the graph, e.g. map, bar chart, scatter plot, etc.",
+    )
 
 
 class LLMIndividualVegaVisualizationLayer(IndividualVisualizationLayer):
@@ -73,6 +77,7 @@ class LLMIndividualVegaVisualizationLayer(IndividualVisualizationLayer):
         return GraphSpecifications(
             format_type="vega-lite",
             specifications=output.specifications,
+            visualization_type=output.best_visualization_type,
             graph=self._graph,
         )
 
@@ -80,7 +85,7 @@ class LLMIndividualVegaVisualizationLayer(IndividualVisualizationLayer):
         """Summarizes the fields"""
         return "\n".join(
             [
-                f'{field.field.name} [{field.unit}]: "{field.description}" with summary: "{field.field.summary}"'
+                f'"{field.field.name}": "{field.description}" with unit {field.unit} and with summary: "{field.field.summary}"'
                 for field in fields
             ]
         )
@@ -90,7 +95,7 @@ class LLMIndividualVegaVisualizationLayer(IndividualVisualizationLayer):
         variables = [self._fields_graph.nodes[index] for index in variable_indexes]
         return "\n".join(
             [
-                f'Group: {composite_field.name}, described as "{composite_field.description}" with fields:\n{self._summarize_fields(composite_field.columns)}\n'
+                f'"{composite_field.description}" with fields:\n{self._summarize_fields(composite_field.columns)}\n'
                 for composite_field in variables
             ]
         )
@@ -102,7 +107,7 @@ class LLMIndividualVegaVisualizationLayer(IndividualVisualizationLayer):
         input_data = {
             "data_source": self._data_source,
             "title": self._graph.title,
-            "graph_description": self._graph.chart_description,
+            # "graph_description": self._graph.chart_description,
             "independent_variables_summary": self._summarize_composite_fields(
                 self._graph.independent_variables
             ),
@@ -122,19 +127,22 @@ class LLMIndividualVegaVisualizationLayer(IndividualVisualizationLayer):
             VegaSpecification,
             [
                 SystemMessagePromptTemplate.from_template(
-                    "This is the title for the graph: {title}"
+                    "This is the title for the visualization: {title}"
                 ),
                 SystemMessagePromptTemplate.from_template(
-                    'This is the datasource path for the graph: "{data_source}"'
+                    'This is the datasource path for the visualization: "{data_source}"'
                 ),
                 SystemMessagePromptTemplate.from_template(
-                    "These are the independent variables for the graph:\n{independent_variables_summary}"
+                    "These are the independent variables for the visualization:\n{independent_variables_summary}"
                 ),
                 SystemMessagePromptTemplate.from_template(
-                    "These are the dependent variables for the graph:\n{dependent_variables_summary}"
+                    "These are the dependent variables for the visualization:\n{dependent_variables_summary}"
                 ),
                 HumanMessagePromptTemplate.from_template(
-                    "Given a set of data and a description of the graph you want to create, can you generate a vega-lite specification in JSON format that will produce the desired graph? Please include the data source, the encoding of the data, and any necessary transformations or scales."
+                    "what kind of visualization would be best suited for this data?"
+                ),
+                HumanMessagePromptTemplate.from_template(
+                    "Given a set of data and a description of the visualization you want to create, can you generate a vega-lite specification in JSON format that will produce the desired visualization? Please include the data source, the encoding of the data, and any necessary transformations or scales."
                 ),
             ],
             LLMQualityEnum.ACCURACY,

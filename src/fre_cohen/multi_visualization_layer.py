@@ -136,7 +136,7 @@ class LLMMultipleVisualizationLayer(MultipleVisualizationLayer):
                     "Here are the fields composing our data set: {all_fields_details}"
                 ),
                 SystemMessagePromptTemplate.from_template(
-                    "Given a large number of fields, I want to split them into smaller graphs. Can you suggest a way to group the fields based on their relationships or similarities, and then identify the independent and dependent variables for each graph? What would be meaningful titles for each graph, describing what is the purpose of the graph? How would you describe their representation (what type of visualization)?"
+                    "Given a large number of fields, I want to split them into multiple visualizations with fewer fields for each. Can you suggest a way to group the fields based on their relationships or similarities, and then identify the independent and dependent variables for each visualization? What would be meaningful titles for each visualization, describing what is its purpose? How would you describe their representation (what type of visualization to use for reprensing them)?"
                 ),
                 SystemMessagePromptTemplate.from_template(
                     "You can reuse the same independent variable fields for multiple graphs."

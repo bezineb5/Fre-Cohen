@@ -171,6 +171,7 @@ class GraphSpecifications(BaseModel):
 
     format_type: str
     specifications: Any
+    visualization_type: str
     graph: IndividualGraph
 
 
