@@ -1,14 +1,13 @@
 """Minimal CLI for fre_cohen package."""
 
 import argparse
-import http.server
+from dataclasses import dataclass
 import json
 import logging
 import pathlib
 import multiprocessing
 from enum import Enum
-import socket
-from typing import Optional
+from xml.etree import ElementTree
 
 import altair as alt
 from graphviz import Digraph
@@ -25,9 +24,10 @@ from fre_cohen.data_structure import (
 from fre_cohen.ingestion import CSVIngestion
 from fre_cohen.multi_visualization_layer import LLMMultipleVisualizationLayer
 from fre_cohen.semantic_layer import OpenAISemanticInterpretation
-from fre_cohen.visualization_layer import (
+from fre_cohen.vega_visualization_layer import (
     build_individual_visualization_layers_for_layout,
 )
+from fre_cohen_cli.file_server import FileServer
 
 logger = logging.getLogger(__name__)
 
@@ -203,64 +203,6 @@ def _apply_visualization_layer(
     )
 
 
-class FileServer:
-    """Simple HTTP server for serving a file"""
-
-    def __init__(self, port: Optional[int], file_to_serve: pathlib.Path) -> None:
-        self.process: Optional[multiprocessing.Process] = None
-        self.file_to_serve = file_to_serve.absolute()
-        self.port = port if port else self._find_available_port()
-
-    def _find_available_port(self) -> int:
-        """Finds an available port"""
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("", 0))
-            return s.getsockname()[1]
-
-    def get_file_url(self) -> str:
-        """Returns the URL of the file which is served"""
-        return f"http://localhost:{self.port}/{self.file_to_serve.name}"
-
-    def _start(self) -> None:
-        server = self._init_server()
-        server.serve_forever()
-
-    def start_in_new_process(self) -> None:
-        """Starts the server in a new process"""
-        self.process = multiprocessing.Process(target=self._start)
-        self.process.start()
-
-    def _init_server(self) -> http.server.HTTPServer:
-        file_to_serve = self.file_to_serve.name
-
-        class Handler(http.server.SimpleHTTPRequestHandler):
-            """Handler for serving the file"""
-
-            def __init__(self, *args, **kwargs):
-                self.file_to_serve = file_to_serve
-                super().__init__(*args, **kwargs)
-
-            def do_GET(self):
-                self.path = self.file_to_serve
-                return super().do_GET()
-
-            def end_headers(self):
-                self.send_header("Access-Control-Allow-Origin", "*")
-                super().end_headers()
-
-        # Create the server
-        logger.info("Serving file %s on port %d", self.file_to_serve, self.port)
-        return http.server.ThreadingHTTPServer(("127.0.0.1", self.port), Handler)
-
-    def stop(self) -> None:
-        """Stops the server"""
-        if self.process:
-            # Wait for the server process to finish
-            self.process.kill()
-            self.process.join()
-            self.process = None
-
-
 def _render(vl_spec: str, output_file: str) -> None:
     """Renders the content, made in a separate process to avoid a bug in vl-convert"""
     chart = alt.Chart.from_json(vl_spec)
@@ -288,6 +230,7 @@ def _apply_render_visualization(
     logger.info("Server started")
 
     # Render each visualization
+    svgs = []
     for i, layout_spec in enumerate(layout_specs.specifications):
         try:
             output_file = f"{output_base}_visualization_{i}.svg"
@@ -311,11 +254,94 @@ def _apply_render_visualization(
             process.start()
             process.join()
             logger.info("Visualization %s saved to: %s", vl_spec, output_file)
+            svgs.append(output_file)
         except Exception as e:
             logger.error("Error while rendering visualization %d", i, exc_info=e)
 
     server.stop()
+
+    # Now, merge the SVG files into a single one
+    svg_layout = _render_svg_layout(svgs)
+    output_svg = f"{output_base}_visualization.svg"
+    with open(output_svg, "w", encoding="utf-8") as f:
+        f.write(svg_layout)
+    logger.info("Visualization layout saved to: %s", output_svg)
+
     return None
+
+
+@dataclass
+class SizedSvg:
+    width: int
+    height: int
+    svg: ElementTree.Element
+
+
+def _render_svg_layout(svg_files: list[str]) -> str:
+    """Renders the SVG layout"""
+    # Create the root SVG element
+    root = ElementTree.Element("svg", xmlns="http://www.w3.org/2000/svg")
+
+    sized_svgs: list[SizedSvg] = []
+    for svg_file in svg_files:
+        # Parse the SVG file
+        tree = ElementTree.parse(svg_file)
+        sized_svg = tree.getroot()
+
+        # Remove the namespace attributes
+        for key in sized_svg.attrib.keys():
+            if key.startswith("xmlns"):
+                del sized_svg.attrib[key]
+
+        # Get the width and height
+        width = int(sized_svg.attrib["width"].replace("px", ""))
+        height = int(sized_svg.attrib["height"].replace("px", ""))
+
+        # Append the SVG element to the list
+        sized_svgs.append(SizedSvg(width=width, height=height, svg=sized_svg))
+
+    # Order the svg files by decreasing height
+    sized_svgs.sort(key=lambda svg: svg.height, reverse=True)
+
+    # We want an approximativelly 4/3 aspect ratio
+    # Initialize the current position
+    x, y = 0, 0
+
+    # Initialize the maximum height of the current row
+    max_width = 0
+    max_row_height = 0
+
+    # Calculate the total area of the SVGs
+    total_area = sum(svg.width * svg.height for svg in sized_svgs)
+
+    # Calculate the width and height of the grid
+    grid_width = (total_area * 4 / 3) ** 0.5
+
+    for sized_svg in sized_svgs:
+        # If the SVG doesn't fit on the current row, move to the next row
+        if x + sized_svg.width > grid_width:
+            x = 0
+            y += max_row_height
+            max_row_height = 0
+
+        # Position the SVG at the current position
+        sized_svg.svg.attrib["x"] = str(x)
+        sized_svg.svg.attrib["y"] = str(y)
+
+        # Update the current position and the maximum row height
+        x += sized_svg.width
+        max_width = max(max_width, x)
+        max_row_height = max(max_row_height, sized_svg.height)
+
+        # Append the SVG element to the root element
+        root.append(sized_svg.svg)
+
+    # Set the width and height of the root SVG
+    root.attrib["width"] = str(max_width)
+    root.attrib["height"] = str(y + max_row_height)
+
+    # Convert the root element to a string
+    return ElementTree.tostring(root, encoding="unicode")
 
 
 LAYER_METHODS = {

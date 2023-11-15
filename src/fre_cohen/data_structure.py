@@ -173,6 +173,7 @@ class GraphSpecifications(BaseModel):
     specifications: Any
     visualization_type: str
     graph: IndividualGraph
+    map_style: Optional[str] = None
 
 
 class LayoutSpecifications(BaseModel):
