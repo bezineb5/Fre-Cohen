@@ -1,12 +1,12 @@
 """Minimal CLI for fre_cohen package."""
 
 import argparse
-from dataclasses import dataclass
 import json
 import logging
 import pathlib
-import multiprocessing
+from dataclasses import dataclass
 from enum import Enum
+from typing import Optional
 from xml.etree import ElementTree
 
 import altair as alt
@@ -23,11 +23,11 @@ from fre_cohen.data_structure import (
 )
 from fre_cohen.ingestion import CSVIngestion
 from fre_cohen.multi_visualization_layer import LLMMultipleVisualizationLayer
+from fre_cohen.rendering.visualization_rendering import render_graph
 from fre_cohen.semantic_layer import OpenAISemanticInterpretation
 from fre_cohen.vega_visualization_layer import (
     build_individual_visualization_layers_for_layout,
 )
-from fre_cohen_cli.file_server import FileServer
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,16 @@ def _parse_arguments():
         "--input-json",
         type=str,
         help="The input JSON file",
+    )
+    parser.add_argument(
+        "--mbtiles",
+        type=str,
+        help="The MBTiles file",
+    )
+    parser.add_argument(
+        "--fonts",
+        type=str,
+        help="The fonts directory",
     )
     parser.add_argument(
         "--layer",
@@ -203,17 +213,13 @@ def _apply_visualization_layer(
     )
 
 
-def _render(vl_spec: str, output_file: str) -> None:
-    """Renders the content, made in a separate process to avoid a bug in vl-convert"""
-    chart = alt.Chart.from_json(vl_spec)
-    chart.save(output_file)
-
-
 def _apply_render_visualization(
     *,
     input_json: str,
     output_base: str,
     data_source: str,
+    mbtiles_path: Optional[pathlib.Path],
+    fonts_path: Optional[pathlib.Path],
     **kwargs,
 ):
     """Renders the visualization"""
@@ -223,42 +229,22 @@ def _apply_render_visualization(
     # Deserialize layout specifications from JSON
     layout_specs = LayoutSpecifications(**json.loads(input_json))
 
-    # Bug in vl-convert: it cannot fetch data from a file:// URL
-    # So we need to start a webserver to serve the data
-    server = FileServer(port=53789, file_to_serve=pathlib.Path(data_source))
-    server.start_in_new_process()
-    logger.info("Server started")
-
     # Render each visualization
     svgs = []
     for i, layout_spec in enumerate(layout_specs.specifications):
         try:
-            output_file = f"{output_base}_visualization_{i}.svg"
-            logger.info("Rendering visualization %d to: %s", i, output_file)
-
-            # Hack to fix the bug in vl-convert:
-            # update the data source path to the locally served file
-            layout_spec.specifications.setdefault("data", {})[
-                "url"
-            ] = server.get_file_url()
-            logger.info(
-                "Updated data source: %s", layout_spec.specifications["data"]["url"]
+            output_file = pathlib.Path(f"{output_base}_visualization_{i}.svg")
+            svgs.append(
+                render_graph(
+                    layout_spec,
+                    pathlib.Path(data_source),
+                    output_file,
+                    mbtiles_path=mbtiles_path,
+                    fonts_path=fonts_path,
+                )
             )
-
-            # Render the visualization directly using vl_convert
-            vl_spec = json.dumps(layout_spec.specifications)
-            # For no known reason, it must be done in a separate process
-            process = multiprocessing.Process(
-                target=_render, args=(vl_spec, output_file)
-            )
-            process.start()
-            process.join()
-            logger.info("Visualization %s saved to: %s", vl_spec, output_file)
-            svgs.append(output_file)
         except Exception as e:
             logger.error("Error while rendering visualization %d", i, exc_info=e)
-
-    server.stop()
 
     # Now, merge the SVG files into a single one
     svg_layout = _render_svg_layout(svgs)
@@ -277,7 +263,7 @@ class SizedSvg:
     svg: ElementTree.Element
 
 
-def _render_svg_layout(svg_files: list[str]) -> str:
+def _render_svg_layout(svg_files: list[pathlib.Path]) -> str:
     """Renders the SVG layout"""
     # Create the root SVG element
     root = ElementTree.Element("svg", xmlns="http://www.w3.org/2000/svg")
@@ -389,6 +375,8 @@ def main():
             output_base=args.output,
             data_source=csv_path,
             data=data,
+            mbtiles_path=pathlib.Path(args.mbtiles) if args.mbtiles else None,
+            fonts_path=pathlib.Path(args.fonts) if args.fonts else None,
         )
 
         if current_json is None:

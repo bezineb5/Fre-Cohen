@@ -2,8 +2,9 @@ import http.server
 import logging
 import multiprocessing
 import pathlib
-import socket
 from typing import Optional
+
+from fre_cohen.rendering import utils
 
 logger = logging.getLogger(__name__)
 
@@ -11,16 +12,14 @@ logger = logging.getLogger(__name__)
 class FileServer:
     """Simple HTTP server for serving a file"""
 
-    def __init__(self, port: Optional[int], file_to_serve: pathlib.Path) -> None:
+    def __init__(self, file_to_serve: pathlib.Path, port: Optional[int] = None) -> None:
         self.process: Optional[multiprocessing.Process] = None
         self.file_to_serve = file_to_serve.absolute()
         self.port = port if port else self._find_available_port()
 
     def _find_available_port(self) -> int:
         """Finds an available port"""
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("", 0))
-            return s.getsockname()[1]
+        return utils.find_available_port()
 
     def get_file_url(self) -> str:
         """Returns the URL of the file which is served"""
@@ -64,3 +63,10 @@ class FileServer:
             self.process.kill()
             self.process.join()
             self.process = None
+
+    def __enter__(self):
+        self.start_in_new_process()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop()

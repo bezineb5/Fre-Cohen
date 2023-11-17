@@ -37,9 +37,9 @@ def get_openai_llm(config: Config, quality: LLMQualityEnum) -> ChatOpenAI:
 
     # Timeout is in seconds
     return ChatOpenAI(
-        openai_api_key=config.openai_api_key,
+        api_key=config.openai_api_key,
         model=model,
-        request_timeout=config.request_timeout_seconds,
+        timeout=config.request_timeout_seconds,
     )
 
 
