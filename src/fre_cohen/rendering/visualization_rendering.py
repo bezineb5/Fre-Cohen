@@ -24,6 +24,9 @@ def render_graph(
 ) -> pathlib.Path:
     """Renders the graph specifications"""
 
+    if not graph_specs.specifications:
+        raise ValueError("No specifications to render")
+
     # Bug in vl-convert: it cannot fetch data from a file:// URL
     # So we need to start a webserver to serve the data
     with FileServer(file_to_serve=data_source) as server:
@@ -77,7 +80,7 @@ def _add_map_layer(vl_spec: Any, server_url: str) -> Any:
         },
     }
 
-    vl_spec["layer"].append(map_layer)
+    # vl_spec["layer"].append(map_layer)
     return vl_spec
 
 

@@ -4,20 +4,24 @@ import argparse
 import json
 import logging
 import pathlib
+import sys
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Optional, Tuple
 from xml.etree import ElementTree
 
-import altair as alt
 from graphviz import Digraph
+from pydantic import ValidationError
 
 from fre_cohen import configuration
+from fre_cohen.critic_layer import LLMVisualizationCriticLayer
 from fre_cohen.data_structure import (
     CompositeField,
     Field,
     FieldsGraph,
     GraphsLayout,
+    GraphSpecifications,
+    IndividualGraph,
     LayoutSpecifications,
     RichField,
 )
@@ -25,9 +29,7 @@ from fre_cohen.ingestion import CSVIngestion
 from fre_cohen.multi_visualization_layer import LLMMultipleVisualizationLayer
 from fre_cohen.rendering.visualization_rendering import render_graph
 from fre_cohen.semantic_layer import OpenAISemanticInterpretation
-from fre_cohen.vega_visualization_layer import (
-    build_individual_visualization_layers_for_layout,
-)
+from fre_cohen.vega_visualization_layer import LLMIndividualVegaVisualizationLayer
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +40,21 @@ class LayerEnum(Enum):
     SEMANTIC = "semantic"
     MULTI_VISUALIZATION = "multi_visualization"
     VISUALIZATION = "visualization"
+    CRITIC = "critic"
     RENDERING = "rendering"
 
 
-def _parse_arguments():
+DEFAULT_LAYERS_EXECUTION = [
+    LayerEnum.SEMANTIC.value,
+    LayerEnum.MULTI_VISUALIZATION.value,
+    LayerEnum.VISUALIZATION.value,
+    LayerEnum.CRITIC.value,
+    LayerEnum.VISUALIZATION.value,
+    LayerEnum.RENDERING.value,
+]
+
+
+def _parse_arguments(arguments: list[str]) -> argparse.Namespace:
     """Parses the arguments"""
 
     parser = argparse.ArgumentParser(description="CLI for fre_cohen package")
@@ -74,11 +87,11 @@ def _parse_arguments():
     parser.add_argument(
         "--layer",
         type=str,
-        help="The layer type",
+        help="The list of layers to apply",
         choices=[v.value for v in LayerEnum.__members__.values()],
         nargs="+",  # make the argument repeatable
+        default=DEFAULT_LAYERS_EXECUTION,
     )
-
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose mode")
     # OpenAI API key
     parser.add_argument(
@@ -86,7 +99,7 @@ def _parse_arguments():
         type=str,
         help="The OpenAI API key",
     )
-    return parser.parse_args()
+    return parser.parse_args(arguments)
 
 
 def _pretty_rich_field_name(rich_field: RichField) -> str:
@@ -125,11 +138,9 @@ def _generate_dot_file(fields_graph: FieldsGraph) -> str:
 def _list_layers_to_apply(args: argparse.Namespace) -> list[str]:
     """Returns the list of layers to apply"""
 
-    raw_layers = args.layer or [
-        LayerEnum.SEMANTIC.value,
-        LayerEnum.MULTI_VISUALIZATION.value,
-    ]
-    return raw_layers
+    if not args.layer:
+        raise ValueError("No layer to apply")
+    return args.layer
 
 
 def _apply_semantic_layer(
@@ -194,22 +205,83 @@ def _apply_visualization_layer(
     logger.info("Visualization layer")
 
     # Deserialize fields_graph from JSON
-    graphs_layout = GraphsLayout(**json.loads(input_json))
+    # It can be the output of the multi visualization layer or of the critic layer
+    fields_graph: Optional[FieldsGraph] = None
+    graph_spec_pairs: list[Tuple[IndividualGraph, Optional[GraphSpecifications]]] = []
+
+    try:
+        graphs_layout = GraphsLayout(**json.loads(input_json))
+        fields_graph = graphs_layout.fields_graph
+        graph_spec_pairs = [(graph, None) for graph in graphs_layout.graphs]
+    except ValidationError as e:
+        logger.info("Not a GraphsLayout: %s", e)
+        layout_specs = LayoutSpecifications(**json.loads(input_json))
+        fields_graph = layout_specs.fields_graph
+        graph_spec_pairs = [(spec.graph, spec) for spec in layout_specs.specifications]
 
     # Apply visualization layer
-    viz_layers = build_individual_visualization_layers_for_layout(
-        config=config, data_source=data_source, layout=graphs_layout
-    )
-    specs = [viz_layer.get_specifications() for viz_layer in viz_layers]
+    specs = [
+        LLMIndividualVegaVisualizationLayer(
+            config, data_source, fields_graph, graph, spec
+        ).get_specifications()
+        for (graph, spec) in graph_spec_pairs
+    ]
 
-    layout_specs = LayoutSpecifications(
-        fields_graph=graphs_layout.fields_graph,
+    new_layout_specs = LayoutSpecifications(
+        fields_graph=fields_graph,
         specifications=specs,
     )
 
     # Serialize layout_specs as JSON
     return json.dumps(
-        layout_specs, default=lambda o: o.__dict__, sort_keys=True, indent=4
+        new_layout_specs, default=lambda o: o.__dict__, sort_keys=True, indent=4
+    )
+
+
+def _apply_critic_layer(
+    *,
+    config: configuration.Config,
+    input_json: str,
+    data_source: str,
+    mbtiles_path: Optional[pathlib.Path],
+    fonts_path: Optional[pathlib.Path],
+    **kwargs,
+) -> str:
+    """Applies the critic layer"""
+
+    logger.info("Critic layer")
+
+    # Deserialize layout specifications from JSON
+    layout_specs = LayoutSpecifications(**json.loads(input_json))
+
+    # Apply critic layer
+    critic_layers = []
+    for i, spec in enumerate(layout_specs.specifications):
+        critic_layer = LLMVisualizationCriticLayer(
+            config=config,
+            graph=spec,
+            data_source=pathlib.Path(data_source),
+            mbtiles_path=mbtiles_path,
+            fonts_path=fonts_path,
+        )
+        critic_layers.append(critic_layer)
+
+    # Enrich the layout specifications with critic advices
+    enriched_specs = []
+    for i, spec in enumerate(layout_specs.specifications):
+        enriched_specs.append(critic_layers[i].enrich_with_critic_advices())
+
+    enriched_layout_specs = LayoutSpecifications(
+        fields_graph=layout_specs.fields_graph,
+        specifications=enriched_specs,
+    )
+
+    # Serialize enriched_layout_specs as JSON
+    return json.dumps(
+        enriched_layout_specs,
+        default=lambda o: o.__dict__,
+        sort_keys=True,
+        indent=4,
     )
 
 
@@ -225,6 +297,8 @@ def _apply_render_visualization(
     """Renders the visualization"""
     if not output_base:
         return None
+
+    logger.info("Rendering visualization")
 
     # Deserialize layout specifications from JSON
     layout_specs = LayoutSpecifications(**json.loads(input_json))
@@ -334,14 +408,15 @@ LAYER_METHODS = {
     LayerEnum.SEMANTIC: _apply_semantic_layer,
     LayerEnum.MULTI_VISUALIZATION: _apply_multi_visualization_layer,
     LayerEnum.VISUALIZATION: _apply_visualization_layer,
+    LayerEnum.CRITIC: _apply_critic_layer,
     LayerEnum.RENDERING: _apply_render_visualization,
 }
 
 
-def main():
+def main(arguments: list[str]) -> None:
     """Main function"""
 
-    args = _parse_arguments()
+    args = _parse_arguments(arguments)
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(level=log_level)
 
@@ -388,5 +463,13 @@ def main():
         logger.info("Current JSON [%s]: %s", json_filename, current_json)
 
 
+def run():
+    """Calls :func:`main` passing the CLI arguments extracted from :obj:`sys.argv`
+
+    This function can be used as entry point to create console scripts with setuptools.
+    """
+    main(sys.argv[1:])
+
+
 if __name__ == "__main__":
-    main()
+    run()

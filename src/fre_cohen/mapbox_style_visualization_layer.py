@@ -5,7 +5,7 @@ The cartography layer is responsible for generating map layout
 import json
 import logging
 import pathlib
-from typing import Any, Dict, Sequence
+from typing import Any, Dict, Optional, Sequence
 
 from langchain.chains import LLMChain
 from langchain.prompts.chat import (
@@ -19,6 +19,7 @@ from fre_cohen.data_structure import (
     FieldsGraph,
     GraphSpecifications,
     IndividualGraph,
+    InstructionOrigin,
     RichField,
 )
 from fre_cohen.llms import LLMQualityEnum, build_llm_chain
@@ -81,13 +82,12 @@ class LLMMapboxStyleSpecifications(IndividualVisualizationLayer):
     def __init__(
         self,
         config: configuration.Config,
-        data_source: str,
         fields_graph: FieldsGraph,
         graph: IndividualGraph,
+        previous_specifications: Optional[GraphSpecifications],
     ):
-        super().__init__(fields_graph, graph)
+        super().__init__(fields_graph, graph, previous_specifications)
 
-        self._data_source = data_source
         self._llm_style = self._build_llm_chain_for_mapbox_style(config)
 
     def get_specifications(self) -> GraphSpecifications:
@@ -102,7 +102,6 @@ class LLMMapboxStyleSpecifications(IndividualVisualizationLayer):
         return GraphSpecifications(
             format_type="mabpox-style",
             specifications=map_style,
-            visualization_type="map",
             graph=self._graph,
         )
 
@@ -130,7 +129,6 @@ class LLMMapboxStyleSpecifications(IndividualVisualizationLayer):
 
         # Build the input data
         input_data = {
-            "data_source": self._data_source,
             "title": self._graph.title,
             "independent_variables_summary": self._summarize_composite_fields(
                 self._graph.independent_variables
@@ -139,6 +137,20 @@ class LLMMapboxStyleSpecifications(IndividualVisualizationLayer):
                 self._graph.dependent_variables
             ),
             "map_layers": self._summarize_map_layers(),
+            "critic_advices": "\n".join(
+                [
+                    instruction.instruction
+                    for instruction in self._graph.instructions
+                    if instruction.origin == InstructionOrigin.CRITIC
+                ]
+            ),
+            "human_instructions": "\n".join(
+                [
+                    instruction.instruction
+                    for instruction in self._graph.instructions
+                    if instruction.origin == InstructionOrigin.HUMAN
+                ]
+            ),
         }
         logger.debug("Mapbox style LLM input: %s", input_data)
         output: MapboxStyleLayers = self._llm_style.run(input_data)
@@ -213,9 +225,6 @@ class LLMMapboxStyleSpecifications(IndividualVisualizationLayer):
                     "This is the title of the map: {title}"
                 ),
                 SystemMessagePromptTemplate.from_template(
-                    'This is the datasource path of the map: "{data_source}"'
-                ),
-                SystemMessagePromptTemplate.from_template(
                     "These are the independent variables of the map:\n{independent_variables_summary}"
                 ),
                 SystemMessagePromptTemplate.from_template(
@@ -234,7 +243,7 @@ class LLMMapboxStyleSpecifications(IndividualVisualizationLayer):
                     "Given a set of data and a description of the map you want to create, can you list the layers with colors in JSON format that will produce the desired visualization?"
                 ),
             ],
-            LLMQualityEnum.ACCURACY,
+            LLMQualityEnum.SPEED,
         )
 
         return llm_chain

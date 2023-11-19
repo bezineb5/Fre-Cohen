@@ -150,6 +150,20 @@ class FieldsGraph(BaseModel):
     description: str
 
 
+class InstructionOrigin(str, Enum):
+    """Instruction origin, capturing the source of the instruction."""
+
+    HUMAN = "human"
+    CRITIC = "critic"
+
+
+class Instruction(BaseModel):
+    """Instruction, given by a human or an algorithm."""
+
+    instruction: str
+    origin: InstructionOrigin
+
+
 class IndividualGraph(BaseModel):
     """Individual graph, capturing the links between columns."""
 
@@ -157,6 +171,7 @@ class IndividualGraph(BaseModel):
     chart_description: str
     independent_variables: Sequence[int]
     dependent_variables: Sequence[int]
+    instructions: Sequence[Instruction] = []
 
 
 class GraphsLayout(BaseModel):
@@ -171,7 +186,6 @@ class GraphSpecifications(BaseModel):
 
     format_type: str
     specifications: Any
-    visualization_type: str
     graph: IndividualGraph
     map_style: Optional[str] = None
 

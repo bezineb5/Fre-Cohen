@@ -1,10 +1,10 @@
 """A context manager for running a map server in a docker container"""
 
-from dataclasses import dataclass
 import json
 import logging
 import pathlib
 import tempfile
+from dataclasses import dataclass
 
 import docker
 

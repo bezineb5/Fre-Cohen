@@ -1,12 +1,10 @@
-from abc import ABC, abstractmethod
 import logging
+from abc import ABC, abstractmethod
 
 from langchain.chains import LLMChain
-from langchain.prompts.chat import (
-    HumanMessagePromptTemplate,
-    SystemMessagePromptTemplate,
-)
-from langchain.pydantic_v1 import BaseModel, Field as PyField
+from langchain.prompts.chat import SystemMessagePromptTemplate
+from langchain.pydantic_v1 import BaseModel
+from langchain.pydantic_v1 import Field as PyField
 
 from fre_cohen import configuration
 from fre_cohen.data_structure import (
@@ -16,7 +14,6 @@ from fre_cohen.data_structure import (
     IndividualGraph,
 )
 from fre_cohen.llms import LLMQualityEnum, build_llm_chain
-
 
 logger = logging.getLogger(__name__)
 
@@ -98,15 +95,17 @@ class LLMMultipleVisualizationLayer(MultipleVisualizationLayer):
 
     def _get_node_index_by_name(self, name: str) -> int:
         """Returns the index of the node by name"""
+        name = name.lower()
         for index, node in enumerate(self._fields_graph.nodes):
-            if node.name == name:
+            if node.name.lower() == name:
                 return index
         raise ValueError(f"Node with name {name} not found")
 
     def _get_node_by_name(self, name: str) -> CompositeField:
         """Returns the node by name"""
+        name = name.lower()
         for node in self._fields_graph.nodes:
-            if node.name == name:
+            if node.name.lower() == name:
                 return node
         raise ValueError(f"Node with name {name} not found")
 
@@ -120,6 +119,12 @@ class LLMMultipleVisualizationLayer(MultipleVisualizationLayer):
         )
         input_data = {
             "all_fields_details": fields_summary,
+            "dependent_fields": "\n".join(
+                [
+                    f"{self._fields_graph.nodes[edge.target].name} depends on {self._fields_graph.nodes[edge.source].name}"
+                    for edge in self._fields_graph.edges
+                ]
+            ),
         }
         logger.debug("Layout LLM input: %s", input_data)
         output: LayoutInfo = self._llm_layout.run(input_data)
@@ -135,11 +140,14 @@ class LLMMultipleVisualizationLayer(MultipleVisualizationLayer):
                 SystemMessagePromptTemplate.from_template(
                     "Here are the fields composing our data set: {all_fields_details}"
                 ),
+                # SystemMessagePromptTemplate.from_template(
+                #     "Here are the dependencies between the fields: {dependent_fields}"
+                # ),
                 SystemMessagePromptTemplate.from_template(
                     "Given a large number of fields, I want to split them into multiple visualizations with fewer fields for each. Can you suggest a way to group the fields based on their relationships or similarities, and then identify the independent and dependent variables for each visualization? What would be meaningful titles for each visualization, describing what is its purpose? How would you describe their representation (what type of visualization to use for reprensing them)?"
                 ),
                 SystemMessagePromptTemplate.from_template(
-                    "You can reuse the same independent variable fields for multiple graphs."
+                    "You can reuse the same independent variable fields for multiple graphs. All the fields should be used at least once. In a graph, a variable cannot be both dependent and independent."
                 ),
             ],
             quality=LLMQualityEnum.ACCURACY,

@@ -23,7 +23,7 @@ from fre_cohen.data_structure import (
     LinkEnum,
     RichField,
 )
-from fre_cohen.llms import build_llm_chain
+from fre_cohen.llms import LLMQualityEnum, build_llm_chain, retry_on_error
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,9 @@ class AggregationInfo(BaseModel):
         CompositeEnum.NONE, description="The composite type of the fields"
     )
     name: str = PyField("", description="The name of the composite field")
+    description: str = PyField(
+        "", description="A rich description of the composite field"
+    )
 
 
 class GroupingInfo(BaseModel):
@@ -179,6 +182,7 @@ class OpenAISemanticInterpretation(SemanticInterpretation):
 
         return links.links
 
+    @retry_on_error
     def _group_fields(self, fields: Sequence[RichField]) -> Sequence[CompositeField]:
         """Group fields together"""
         input_data = {
@@ -193,7 +197,7 @@ class OpenAISemanticInterpretation(SemanticInterpretation):
             CompositeField(
                 columns=self._string_to_richfields(group.field_names, fields),
                 name=group.name,
-                description="",  # group.description,
+                description=group.description,
                 composite=group.composite,
             )
             for group in grouping_info.composite_fields
@@ -222,9 +226,19 @@ class OpenAISemanticInterpretation(SemanticInterpretation):
     ) -> Sequence[RichField]:
         """Converts a list of field names to a list of RichField in the order of the field names"""
         return [
-            next(field for field in all_fields if field.field.name == field_name)
+            self._lookup_field(field_name, all_fields)
             for field_name in fields_to_lookup
         ]
+
+    def _lookup_field(
+        self, field_name: str, all_fields: Sequence[RichField]
+    ) -> RichField:
+        """Looks up a field by name"""
+        for field in all_fields:
+            if field.field.name == field_name:
+                return field
+
+        raise ValueError(f"Field {field_name} not found in {all_fields}")
 
     def _enrich_all_fields(self, fields: Sequence[Field]) -> list[RichField]:
         """Enriches all the fields with semantic information"""
@@ -280,7 +294,17 @@ class OpenAISemanticInterpretation(SemanticInterpretation):
                 HumanMessagePromptTemplate.from_template(
                     "Considering the fields: {all_field_names} - which fields would you group together to form meaningful composite fields? Please give a name to each group of fields with a composition reason."
                 ),
+                SystemMessagePromptTemplate.from_template(
+                    "A composite field is a higher level field composed of other fields. For example, Location could be composed of Country, State, City, and Zip Code. In a composite field, the fields composing it are meaningless without the others."
+                ),
+                SystemMessagePromptTemplate.from_template(
+                    "Please don't link fields that are not related. Those will be always linked together, so any mistake will be propagated to the whole data structure."
+                ),
+                HumanMessagePromptTemplate.from_template(
+                    "Please add a meaningful description to each of the composite fields."
+                ),
             ],
+            quality=LLMQualityEnum.ACCURACY,
         )
 
     def _build_llm_chain_for_links(self, config: configuration.Config) -> LLMChain:
