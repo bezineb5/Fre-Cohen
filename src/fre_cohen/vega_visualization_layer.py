@@ -2,6 +2,7 @@
 The visualization layer is responsible for generating the visualization of the fields graph.
 The output is a valid Vega-lite specification.
 """
+import json
 import logging
 from typing import Any, Optional, Sequence
 
@@ -24,7 +25,7 @@ from fre_cohen.data_structure import (
     InstructionOrigin,
     RichField,
 )
-from fre_cohen.llms import LLMQualityEnum, build_llm_chain, retry_on_error
+from fre_cohen.llms import DEFAULT_RETRIES, LLMQualityEnum, build_llm_chain
 from fre_cohen.mapbox_style_visualization_layer import LLMMapboxStyleSpecifications
 from fre_cohen.visualization_layer import IndividualVisualizationLayer
 
@@ -53,7 +54,7 @@ class VegaSpecification(BaseModel):
             alt.Chart.from_dict(v)
         except Exception as e:
             raise ValueError(
-                f"Vega-lite specifications are not valid. Can you correct them, please? Specifications: {v}. Error: {e}"
+                f"Vega-lite specifications are not valid. Can you correct them, please? Specifications: {json.dumps(v)}. Error: {e}"
             ) from e
 
         return v
@@ -157,9 +158,9 @@ class LLMIndividualVegaVisualizationLayer(IndividualVisualizationLayer):
         """Returns the Vega-lite specifications"""
 
         retries = 0
-        exception_instructions = []
+        exception_instructions: list[str] = []
 
-        while retries < 3:
+        while retries < DEFAULT_RETRIES:
             try:
                 # Build the input data
                 input_data = {
@@ -198,7 +199,7 @@ class LLMIndividualVegaVisualizationLayer(IndividualVisualizationLayer):
                 logger.warning("Error in Vega LLM: %s", e)
                 exception_instructions = [repr(e)]
                 retries += 1
-        raise RuntimeError("Vega LLM failed after 3 retries")
+        raise RuntimeError(f"Vega LLM failed after {DEFAULT_RETRIES} retries")
 
     def _contains_map(self, vega_spec: VegaSpecification) -> bool:
         """Returns true if the vega specification contains a map"""

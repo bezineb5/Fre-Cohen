@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Optional, Sequence, Union
+from typing import Any, Optional, Sequence
 
 from pydantic import BaseModel
 
@@ -18,61 +18,6 @@ class LinkEnum(str, Enum):
     CORRELATION = "correlation"
     CONSTRAINT = "constraint"
     NONE = "none"
-
-
-class Location(BaseModel):
-    """Location data type, capturing the latitude and longitude."""
-
-    latitude: float
-    longitude: float
-    altitude: Optional[float]
-
-
-class Vector(BaseModel):
-    """Vector data type, capturing the x, y and z coordinates."""
-
-    x: float
-    y: float
-    z: float
-
-
-class DateTime(BaseModel):
-    """Date time data type, capturing the date and time."""
-
-    date: str
-    time: str
-
-
-class Matrix(BaseModel):
-    """Matrix data type, capturing the matrix."""
-
-    matrix: Sequence[Sequence[float]]
-
-
-class Quaternion(BaseModel):
-    """Quaternion data type, capturing the quaternion."""
-
-    w: float
-    x: float
-    y: float
-    z: float
-
-
-class CompositeUnion(BaseModel):
-    """Composite data type, capturing the union of all composite types."""
-
-    composite: Union[Location, Vector, DateTime, Matrix, Quaternion]
-
-
-class CompositeEnum(str, Enum):
-    """Composite data types, capturing coordinates, date time, etc."""
-
-    LOCATION = "location (latitude, longitude, altitude)"
-    VECTOR = "vector (x, y, z)"
-    DATETIME = "datetime (date, time)"
-    QUATERNION = "quaternion (w, x, y, z)"
-    MATRIX = "matrix (list of float)"
-    NONE = "none (basic data type)"
 
 
 class TypeEnum(str, Enum):
@@ -116,7 +61,6 @@ class CompositeField(BaseModel):
     columns: Sequence[RichField]
     name: str
     description: str
-    composite: CompositeEnum
 
 
 class IntentType(str, Enum):

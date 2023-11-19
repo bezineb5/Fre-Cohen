@@ -7,7 +7,7 @@ import pathlib
 import sys
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 from xml.etree import ElementTree
 
 from graphviz import Digraph
@@ -115,7 +115,7 @@ def _pretty_composite_field_name(node: CompositeField) -> str:
         [_pretty_rich_field_name(field) for field in node.columns]
     )
 
-    return f"{node.name} ({node.composite.name}): {node.description}\n{list_fields}"
+    return f"{node.name}: {node.description}\n{list_fields}"
 
 
 def _generate_dot_file(fields_graph: FieldsGraph) -> str:
@@ -439,7 +439,7 @@ def main(arguments: list[str]) -> None:
         current_json = "{}"
 
     for layer in layers:
-        layer_method = LAYER_METHODS.get(LayerEnum(layer))
+        layer_method: Optional[Callable] = LAYER_METHODS.get(LayerEnum(layer))
         if layer_method is None:
             raise ValueError(f"Unknown layer {layer}")
 

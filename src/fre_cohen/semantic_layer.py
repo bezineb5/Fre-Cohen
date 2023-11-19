@@ -1,9 +1,11 @@
 """ Methods to add semantic information to the data fields.
 """
 
+import json
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, Sequence
+from re import S
+from typing import Dict, Optional, Sequence
 
 from langchain.chains import LLMChain
 from langchain.prompts.chat import (
@@ -14,7 +16,6 @@ from langchain.pydantic_v1 import BaseModel, Field as PyField
 
 from fre_cohen import configuration
 from fre_cohen.data_structure import (
-    CompositeEnum,
     CompositeField,
     Edge,
     Field,
@@ -23,7 +24,12 @@ from fre_cohen.data_structure import (
     LinkEnum,
     RichField,
 )
-from fre_cohen.llms import LLMQualityEnum, build_llm_chain, retry_on_error
+from fre_cohen.llms import (
+    DEFAULT_RETRIES,
+    LLMQualityEnum,
+    build_llm_chain,
+    retry_on_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +60,6 @@ class AggregationInfo(BaseModel):
     """Aggregation information"""
 
     field_names: list[str] = PyField([], description="The fields to aggregate")
-    composite: CompositeEnum = PyField(
-        CompositeEnum.NONE, description="The composite type of the fields"
-    )
     name: str = PyField("", description="The name of the composite field")
     description: str = PyField(
         "", description="A rich description of the composite field"
@@ -185,41 +188,57 @@ class OpenAISemanticInterpretation(SemanticInterpretation):
     @retry_on_error
     def _group_fields(self, fields: Sequence[RichField]) -> Sequence[CompositeField]:
         """Group fields together"""
-        input_data = {
-            "all_field_names": [field.field.name for field in fields],
-        }
 
-        logger.debug("Group LLM input: %s", input_data)
-        grouping_info: GroupingInfo = self._llm_grouping.run(input_data)
-        logger.debug("Group LLM output: %s", grouping_info)
+        retries = 0
+        exception_instructions: list[str] = []
+        grouping_info: Optional[GroupingInfo] = None
 
-        grouped_ds = [
-            CompositeField(
-                columns=self._string_to_richfields(group.field_names, fields),
-                name=group.name,
-                description=group.description,
-                composite=group.composite,
-            )
-            for group in grouping_info.composite_fields
-        ]
+        while retries < DEFAULT_RETRIES:
+            try:
+                input_data = {
+                    "all_field_names": [field.field.name for field in fields],
+                    "exception_instructions": "\n".join(exception_instructions),
+                }
 
-        # Add missing fields not belonging to any group
-        included_in_groups = [
-            field.field.name for group in grouped_ds for field in group.columns
-        ]
+                logger.debug("Group LLM input: %s", input_data)
+                grouping_info = self._llm_grouping.run(input_data)
+                logger.debug("Group LLM output: %s", grouping_info)
+                if not grouping_info:
+                    raise ValueError("No gouping info returned by LLM")
 
-        for field in fields:
-            if field.field.name not in included_in_groups:
-                grouped_ds.append(
+                grouped_ds = [
                     CompositeField(
-                        columns=[field],
-                        name=field.field.name,
-                        description=field.description,
-                        composite=CompositeEnum.NONE,
+                        columns=self._string_to_richfields(group.field_names, fields),
+                        name=group.name,
+                        description=group.description,
                     )
-                )
+                    for group in grouping_info.composite_fields
+                ]
 
-        return grouped_ds
+                # Add missing fields not belonging to any group
+                included_in_groups = [
+                    field.field.name for group in grouped_ds for field in group.columns
+                ]
+
+                for field in fields:
+                    if field.field.name not in included_in_groups:
+                        grouped_ds.append(
+                            CompositeField(
+                                columns=[field],
+                                name=field.field.name,
+                                description=field.description,
+                            )
+                        )
+
+                return grouped_ds
+            except Exception as e:
+                logger.warning("Error in Vega LLM: %s", e)
+                exception_instructions = [
+                    f"Please correct your previous answer: {json.dumps(grouping_info)}",
+                    f"Because it contains this error: {repr(e)}",
+                ]
+                retries += 1
+        raise RuntimeError(f"Vega LLM failed after {DEFAULT_RETRIES} retries")
 
     def _string_to_richfields(
         self, fields_to_lookup: Sequence[str], all_fields: Sequence[RichField]
@@ -302,6 +321,9 @@ class OpenAISemanticInterpretation(SemanticInterpretation):
                 ),
                 HumanMessagePromptTemplate.from_template(
                     "Please add a meaningful description to each of the composite fields."
+                ),
+                SystemMessagePromptTemplate.from_template(
+                    "{exception_instructions}",
                 ),
             ],
             quality=LLMQualityEnum.ACCURACY,

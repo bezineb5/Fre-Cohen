@@ -20,6 +20,8 @@ from fre_cohen.configuration import Config
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_RETRIES = 5
+
 
 # Enumeration to choose speed or accuracy
 class LLMQualityEnum(str, Enum):
@@ -123,7 +125,7 @@ class _JsonLLMChain:
 
 
 def retry_on_error(
-    func: Callable, max_retries: int = 3, sleep_time: float = 1.0
+    func: Callable, max_retries: int = DEFAULT_RETRIES, sleep_time: float = 1.0
 ) -> Callable:
     """Decorator to retry a function on error"""
 
