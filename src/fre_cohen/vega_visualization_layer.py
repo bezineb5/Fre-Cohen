@@ -139,7 +139,7 @@ class LLMIndividualVegaVisualizationLayer(IndividualVisualizationLayer):
         """Summarizes the fields"""
         return "\n".join(
             [
-                f'"{field.field.name}": "{field.description}" with unit {field.unit} and with summary: "{field.field.summary}"'
+                f'* "{field.field.name}": "{field.description}" with unit {field.unit} and with summary: "{field.field.summary}"'
                 for field in fields
             ]
         )
@@ -149,7 +149,7 @@ class LLMIndividualVegaVisualizationLayer(IndividualVisualizationLayer):
         variables = [self._fields_graph.nodes[index] for index in variable_indexes]
         return "\n".join(
             [
-                f'"{composite_field.name}" with fields:\n{self._summarize_fields(composite_field.columns)}\n'
+                f'Fields related to {composite_field.description}:\n{self._summarize_fields(composite_field.columns)}\n'
                 for composite_field in variables
             ]
         )

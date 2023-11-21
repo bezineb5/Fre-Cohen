@@ -145,7 +145,7 @@ class LLMMultipleVisualizationLayer(MultipleVisualizationLayer):
             except Exception as e:
                 logger.warning("Error in Vega LLM: %s", e)
                 exception_instructions = [
-                    f"Please correct your previous answer: {json.dumps(layout_info)}",
+                    f"Please correct your previous answer: {layout_info.json() if layout_info else None}",
                     f"Because it contains this error: {repr(e)}",
                 ]
                 retries += 1
@@ -164,7 +164,7 @@ class LLMMultipleVisualizationLayer(MultipleVisualizationLayer):
                 #     "Here are the dependencies between the fields: {dependent_fields}"
                 # ),
                 SystemMessagePromptTemplate.from_template(
-                    "Given a large number of fields, I want to split them into multiple visualizations with fewer fields for each. Can you suggest a way to group the fields based on their relationships or similarities, and then identify the independent and dependent variables for each visualization? What would be meaningful titles for each visualization, describing what is its purpose? How would you describe their representation (what type of visualization to use for reprensing them)?"
+                    "Given a large number of fields, I want to split them into multiple visualizations with fewer fields for each. Can you suggest a way to group the fields based on their relationships or similarities, and then identify the independent and dependent variables for each visualization? What would be meaningful titles for each visualization, describing what is its purpose? How would you describe their representation (what type of visualization to use for representing them)?"
                 ),
                 SystemMessagePromptTemplate.from_template(
                     "You can reuse the same independent variable fields for multiple graphs. All the fields must be used at least once. In a graph, a variable cannot be both dependent and independent."

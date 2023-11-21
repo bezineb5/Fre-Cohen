@@ -311,22 +311,19 @@ class OpenAISemanticInterpretation(SemanticInterpretation):
                     "The order of the fields is important, consecutive fields are more closely related."
                 ),
                 HumanMessagePromptTemplate.from_template(
-                    "Considering the fields: {all_field_names} - which fields would you group together to form meaningful composite fields? Please give a name to each group of fields with a composition reason."
+                    "Considering the fields: {all_field_names} - which fields would you group together to form meaningful mathematical entities? Please give a name to each group with the type of entity it is."
                 ),
                 SystemMessagePromptTemplate.from_template(
-                    "A composite field is a higher level field composed of other fields. For example, Location could be composed of Country, State, City, and Zip Code. In a composite field, the fields composing it are meaningless without the others."
+                    "A good example of composite field is a matrix made of its values. Taken individually, the values are meaningless, but together they form a matrix."
                 ),
                 SystemMessagePromptTemplate.from_template(
-                    "Please don't link fields that are not related. Those will be always linked together, so any mistake will be propagated to the whole data structure."
-                ),
-                HumanMessagePromptTemplate.from_template(
-                    "Please add a meaningful description to each of the composite fields."
+                    "Please don't link fields that are not related. Those will be always linked together, so any mistake will be propagated to the whole data structure. Example: time and position are 2 different concepts, so they should not be linked together. Only mathematical entities of the same unit can be in a composite."
                 ),
                 SystemMessagePromptTemplate.from_template(
                     "{exception_instructions}",
                 ),
             ],
-            quality=LLMQualityEnum.ACCURACY,
+            quality=LLMQualityEnum.SPEED,
         )
 
     def _build_llm_chain_for_links(self, config: configuration.Config) -> LLMChain:
